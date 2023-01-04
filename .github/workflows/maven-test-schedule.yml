@@ -1,18 +1,17 @@
 # This workflow will build a Java project with Maven
 # For more information see: https://help.github.com/actions/language-and-framework-guides/building-and-testing-java-with-maven
 
-name: Nightly Build for Develop
+name: Test Auto-Update Dependencies for Develop
 
 on:
-  schedule:
-    - cron: '50 0 * * 1-5'
+  workflow_dispatch:
 
 jobs:
   Nightly_Bridge_Build:
     runs-on: windows-latest
 
     env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.ORG_GHTOKEN }}
 
     strategy:
       fail-fast: false
@@ -26,8 +25,9 @@ jobs:
 
     steps:
       - name: Clone the source code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
+          token: ${{ secrets.ORG_GHTOKEN }}
           fetch-depth: 0
 
       - name: Set up JDK ${{ matrix.jdk }}
@@ -71,7 +71,6 @@ jobs:
         run: |
           git switch develop
           git checkout -b feature/auto-version-${{ github.run_number }}
-          git push --set-upstream origin feature/auto-version-${{ github.run_number }}
 
       - name: Commit POM changes
         if: ${{ env.code_changed }}
@@ -80,8 +79,7 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add ./pom.xml
           git commit -m 'POM versions changed'
-          git pull
-          git push
+          git push --set-upstream origin feature/auto-version-${{ github.run_number }}
 
       # See: https://cli.github.com/manual/
       - name: Create pull request for Auto-Version into Develop
@@ -91,7 +89,7 @@ jobs:
           --base develop
           --head feature/auto-version-${{ github.run_number }}
           --title "$(date +'%m-%d-%Y') - Maven POM auto updates into Develop"
-          --body "Created by Scheduled GitHub action"
+          --body "Created by Automatic Update of POM Dependency Versions"
 
       # Get the current semantic build tag for the branch
       - name: Get current build number
@@ -113,35 +111,3 @@ jobs:
         run: |
           [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
           choco install nsis.install --version=2.46 -y -dv
-
-      # This step overwrites parts of the NSIS program with PK specific code.  I don't know what exactly.
-      #      - name: Extract NSIS log if not cached
-      #        if: steps.cache_NSIS.outputs.cache-hit != 'true'
-      #        run: |
-      #          echo "$(pwd)"
-      #          7z.exe x "D:\a\pk-bridge\pk-bridge\bridge-build\nsis-2.46-log.zip" -o"C:\Program Files (x86)\NSIS" -y -r
-      #          cd "D:\a\pk-bridge\pk-bridge"
-      #          echo "$(pwd)"
-      #          dir
-
-      # Create Bridge. Copy zip and exe files.  Rename *.exe file. - develop branch
-      #      - name: Create Bridge installer
-      #        run: |
-      #          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DMIM_FILENAME="D:\a\pk-bridge\pk-bridge\bridge-build\bridge.zip" /DVERSION_NUMBER="${{ env.Nightly_Build }}" /DPRODUCT_VERSION="${{ env.Nightly_Build }}" "D:\a\pk-bridge\pk-bridge\installer\bridge\bridge.nsi"
-
-      #      - name: Copy and Upload Bridge zip, exe, and setupexe via Maven
-      #        run: |
-      #          mkdir staging
-      #          copy "D:/a/pk-bridge/pk-bridge/bridge-build/*.zip" staging
-      #          copy "D:/a/pk-bridge/pk-bridge/installer/bridge/*.exe" staging
-      #          copy "D:\a\pk-bridge\pk-bridge\installer\bridge\bridgesetup-${{ env.Nightly_Build }}.exe" "D:\a\pk-bridge\pk-bridge\staging\bridge.exe"
-      #          ./mvnw --batch-mode -f "uploadzip.xml" clean deploy -Drevision="${{ env.Nightly_Build }}" -s .mvn/wrapper/settings.xml
-      #          ./mvnw --batch-mode -f "uploadexe.xml" clean deploy -Drevision="${{ env.Nightly_Build }}" -s .mvn/wrapper/settings.xml
-      #          ./mvnw --batch-mode -f "uploadsetupexe.xml" clean deploy -Drevision="${{ env.Nightly_Build }}" -s .mvn/wrapper/settings.xml
-
-      # This will find no files under a PUSH request.  This is normal and expected.  It should only WARN.
-      #      - name: Upload Bridge artifacts to GitHub
-      #        uses: actions/upload-artifact@v2
-      #        with:
-      #          name: Bridge-${{ env.Nightly_Build }}_Package
-      #          path: staging

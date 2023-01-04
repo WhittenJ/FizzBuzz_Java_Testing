@@ -1,0 +1,161 @@
+# This workflow will build a Java project with Maven
+# For more information see: https://help.github.com/actions/language-and-framework-guides/building-and-testing-java-with-maven
+
+name: Build for Feature/Release branch
+
+# Purpose: This will create a Feature or Release Build when a commit is PUSHED into a Feature or Release branch.
+
+# Steps:
+# 1. Checkout Code.
+# 2. Get the current project.version from the pom.xml.
+# 3. Calculate the build number by using the project.version
+#     - Feature builds can be identified by -f
+#     - Release builds can be identified by -r
+# 4. PULL_REQUEST events only - Create a Pull Request from the Release branch into Develop.
+# 5. Compile the build with Maven.
+# 6. Create the Bridge Installer with NSIS
+# 7. Upload the Bridge install files to GitHub
+
+on:
+  push:
+    branches:
+      - feature/**
+      - release/**
+
+  pull_request:
+    branches:
+      - release/**
+    types: [ closed ]
+
+jobs:
+  Build_bridge:
+    runs-on: windows-latest
+
+    env:
+      GH_TOKEN: ${{ secrets.ORG_GHTOKEN }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ['windows']
+        jdk: [ '8' ]
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Clone the source code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK ${{ matrix.jdk }}
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: ${{ matrix.jdk }}
+
+      - name: Set up cache for ~./m2/repository
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ matrix.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            maven-${{ matrix.os }}-
+
+      - name: Set up cache for NSIS v2.46
+        id: cache_NSIS
+        uses: actions/cache@v3
+        with:
+          path: C:\Program Files (x86)\NSIS
+          key: ${{ matrix.os }}-nsis
+
+      # $CURRENT_FEATURE_VERSION should be <project.version> without -SNAPSHOT, eg "1.0.245-SNAPSHOT" would be "1.0.245".
+      # $FEATURE_BUILD should be <project.version> with a new qualifier of '-f[Date_Time of commit].[commit short sha]', eg "1.0.245-f20220914_1547.abcdef"
+      # Note: base_ref and head_ref are only defined if this workflow was triggered by a PULL_REQUEST event.
+      - name: Calculate build number
+        run: |
+          $CURRENT_FEATURE_VERSION=mvn help:evaluate -Dexpression="project.version" -q -DforceStdout
+          $MAJOR=mvn build-helper:parse-version -D"version.version"=$CURRENT_FEATURE_VERSION help:evaluate -Dexpression="parsedVersion.majorVersion" -q -DforceStdout
+          $MINOR=mvn build-helper:parse-version -D"version.version"=$CURRENT_FEATURE_VERSION help:evaluate -Dexpression="parsedVersion.minorVersion" -q -DforceStdout
+          $PATCH=mvn build-helper:parse-version -D"version.version"=$CURRENT_FEATURE_VERSION help:evaluate -Dexpression="parsedVersion.incrementalVersion" -q -DforceStdout
+          $FEATURE_VERSION=$MAJOR+'.'+$MINOR+'.'+$PATCH
+          $COMMIT_DATETIME=(git log -n 1 --pretty=format:"%cd" --date='format:%Y%m%d_%H%M%S')
+          $FEATURE_BUILD=$FEATURE_VERSION + $(
+              if ( $${{ startsWith(github.ref_name, 'feature/') }} ) {
+                  "-f" }
+              elseif ( $${{ startsWith(github.ref_name, 'release/') }} ) {
+                  "-r" }
+              elseif ( $${{ github.event.pull_request.merged == true && startsWith(github.base_ref, 'release/') }} ) {
+                  "-r" }
+              else {
+                  echo "**** Pull Request closed, but not merged.  No build required.  Exiting. ****"
+                  exit 1
+              }
+          ) +$COMMIT_DATETIME+'.'+$(git rev-parse --short HEAD)
+          echo "Feature_Version=$FEATURE_VERSION" >> $env:GITHUB_ENV
+          echo "Feature_Build=$FEATURE_BUILD" >> $env:GITHUB_ENV
+
+      # See: https://cli.github.com/manual/
+      # Check if we need to make a Pull Request to merge Release branch changes into Develop.
+      - name: Check if a Pull Request was created to merge Release into Develop
+        if: ${{ startsWith(github.base_ref, 'release/') }}
+        run: |
+          $PR_CREATED=gh pr list --search "Merge Release/${{ env.Feature_Version }} changes into Develop."
+          echo "PR_Created=$PR_CREATED" >> $env:GITHUB_ENV
+
+      # Only create a PR in Release branches in which no "Merge Release/** changes into Develop." exists.
+      # Otherwise, this will give an error if a PR has already been created.
+      - name: Create a Pull Request to merge Release into Develop
+        if: ${{ startsWith(github.base_ref, 'release/') && env.PR_Created == '' }}
+        run: >
+          gh pr create
+          --base develop
+          --title "Merge Release/${{ env.Feature_Version }} changes into Develop."
+          --fill
+
+      - name: Build ${{ env.Feature_Build }} with Maven
+        run: |
+          echo "Build number will be ${{ env.Feature_Build }}"
+          mvn versions:set -DnewVersion="${{ env.Feature_Build }}"
+          mvn --batch-mode clean install
+
+      # Required for Bridge to build *.exe installer
+      - name: Install NSIS if not cached
+        if: steps.cache_NSIS.outputs.cache-hit != 'true'
+        run: |
+          [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+          choco install nsis.install --version=2.46 -y -dv
+
+      # This step overwrites parts of the NSIS program with PK specific code.  I don't know what exactly.
+#      - name: Extract NSIS log if not cached
+#        if: steps.cache_NSIS.outputs.cache-hit != 'true'
+#        run: |
+#          echo "$(pwd)"
+#          7z.exe x "D:\a\pk-bridge\pk-bridge\bridge-build\nsis-2.46-log.zip" -o"C:\Program Files (x86)\NSIS" -y -r
+#          cd "D:\a\pk-bridge\pk-bridge"
+#          echo "$(pwd)"
+#          dir
+
+      # Create Bridge exe file using NSIS
+#      - name: Create Bridge installer
+#        run: |
+#          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DMIM_FILENAME="D:\a\pk-bridge\pk-bridge\bridge-build\bridge.zip" /DVERSION_NUMBER="${{ env.Feature_Build }}" /DPRODUCT_VERSION="${{ env.Feature_Build }}" "D:\a\pk-bridge\pk-bridge\installer\bridge\bridge.nsi"
+
+#      - name: Copy and Upload Bridge zip, exe, and setupexe via Maven
+#        run: |
+#          mkdir staging
+#          copy "D:/a/pk-bridge/pk-bridge/bridge-build/*.zip" staging
+#          copy "D:/a/pk-bridge/pk-bridge/installer/bridge/*.exe" staging
+#          copy "D:\a\pk-bridge\pk-bridge\installer\bridge\bridgesetup-${{ env.Feature_Build }}.exe" "D:\a\pk-bridge\pk-bridge\staging\bridge.exe"
+#          ./mvnw --batch-mode -f "uploadzip.xml" clean deploy -Drevision="${{ env.Feature_Build }}" -s .mvn/wrapper/settings.xml
+#          ./mvnw --batch-mode -f "uploadexe.xml" clean deploy -Drevision="${{ env.Feature_Build }}" -s .mvn/wrapper/settings.xml
+#          ./mvnw --batch-mode -f "uploadsetupexe.xml" clean deploy -Drevision="${{ env.Feature_Build }}" -s .mvn/wrapper/settings.xml
+
+      # This will find no files under a PUSH request.  This is normal and expected.  It should only WARN.
+#      - name: Upload Bridge artifacts to Github
+#        uses: actions/upload-artifact@v2
+#        with:
+#          name: Bridge-${{ env.Feature_Build }}_Package
+#          path: staging
