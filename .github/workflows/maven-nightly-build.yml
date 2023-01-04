@@ -246,8 +246,8 @@ jobs:
           mvn versions:set -DnewVersion="$PROJECT_BUILD" versions:commit
           mvn --batch-mode clean install -DskipTests
 
-      - name: Upload Project artifacts to Github
-        uses: actions/upload-artifact@v3
-        with:
-          name: Project-${{ needs.Calc_project_build.outputs.project_build }}_Package
-          path: staging
+#      - name: Upload Project artifacts to Github
+#        uses: actions/upload-artifact@v3
+#        with:
+#          name: Project-${{ needs.Calc_project_build.outputs.project_build }}_Package
+#          path: staging
