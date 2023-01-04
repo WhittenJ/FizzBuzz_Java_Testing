@@ -39,10 +39,10 @@ jobs:
 
       - name: Get Release Version
         run: |
-          $MAJOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.majorVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
-          $MINOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.minorVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
-          $PATCH=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.incrementalVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
-          $NEXT_MINOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.nextMinorVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
+          $MAJOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.majorVersion" -q -DforceStdout
+          $MINOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.minorVersion" -q -DforceStdout
+          $PATCH=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.incrementalVersion" -q -DforceStdout
+          $NEXT_MINOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.nextMinorVersion" -q -DforceStdout
           $PROJECT_VERSION=$MAJOR+'.'+$MINOR+'.'+$PATCH
           $NEXT_PROJECT_VERSION=$MAJOR+'.'+$NEXT_MINOR+'.0-SNAPSHOT'
           echo "project_version=$PROJECT_VERSION" >> $env:GITHUB_ENV

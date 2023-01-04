@@ -50,7 +50,7 @@ jobs:
       # $PROJECT_BUILD should be <project.version> with a new qualifier of '-r[Date_Time of commit].[commit short sha]', eg "1.0.245-r20220914_1547.abcdef"
       - name: Calculate Release Version
         run: |
-          $CURRENT_PROJECT_VERSION=(mvn help:evaluate -Dexpression="project.version" -q -DforceStdout -s .mvn/wrapper/settings.xml).Trim("-SNAPSHOT")
+          $CURRENT_PROJECT_VERSION=(mvn help:evaluate -Dexpression="project.version" -q -DforceStdout).Trim("-SNAPSHOT")
           $COMMIT_DATETIME=(git log -n 1 --pretty=format:"%cd" --date='format:%Y%m%d_%H%M%S')
           $COMMIT_SHA=(git rev-parse --short HEAD)
           $PROJECT_BUILD=$CURRENT_PROJECT_VERSION+'-r'+$COMMIT_DATETIME+'.'+$COMMIT_SHA
@@ -82,8 +82,8 @@ jobs:
 
       - name: Calculate next Develop version
         run: |
-          $MAJOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.majorVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
-          $MINOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.nextMinorVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
+          $MAJOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.majorVersion" -q -DforceStdout
+          $MINOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.nextMinorVersion" -q -DforceStdout
           $NEXT_VERSION=$MAJOR+'.'+$MINOR+'.0-SNAPSHOT'
           echo "Develop will be bumped to $NEXT_VERSION"
           echo "nextVersion=$NEXT_VERSION" >> $env:GITHUB_ENV
@@ -95,7 +95,7 @@ jobs:
 
       - name: Bump Develop version to ${{ env.nextVersion }}
         run: |
-          mvn versions:set -DnewVersion="${{ env.nextVersion }}" versions:commit -s .mvn/wrapper/settings.xml
+          mvn versions:set -DnewVersion="${{ env.nextVersion }}" versions:commit
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add .

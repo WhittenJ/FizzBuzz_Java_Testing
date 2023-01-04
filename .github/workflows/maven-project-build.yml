@@ -140,12 +140,12 @@ jobs:
         id: calc_build_number
         run: |
           if ( $${{ startsWith(github.ref_name, 'master') }} ) {
-            $PROJECT_BUILD=(mvn help:evaluate -Dexpression="project.version" -q -DforceStdout -s .mvn/wrapper/settings.xml).Trim("-SNAPSHOT")
+            $PROJECT_BUILD=(mvn help:evaluate -Dexpression="project.version" -q -DforceStdout).Trim("-SNAPSHOT")
           }
           else {
-            $MAJOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.majorVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
-            $MINOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.minorVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
-            $PATCH=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.incrementalVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
+            $MAJOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.majorVersion" -q -DforceStdout
+            $MINOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.minorVersion" -q -DforceStdout
+            $PATCH=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.incrementalVersion" -q -DforceStdout
             $PROJECT_VERSION=$MAJOR+'.'+$MINOR+'.'+$PATCH
             $COMMIT_DATETIME=(git log -n 1 --pretty=format:"%cd" --date='format:%Y%m%d_%H%M%S')
             $COMMIT_SHA=(git rev-parse --short HEAD)
@@ -185,7 +185,7 @@ jobs:
             maven-
 
       - name: Run Project Unit Tests
-        run: mvn --batch-mode clean package -s .mvn/wrapper/settings.xml
+        run: mvn --batch-mode clean package
 
   Build_project:
     name: Build and Deploy Project
@@ -219,8 +219,8 @@ jobs:
         run: |
           $PROJECT_BUILD="${{ needs.Calc_project_build.outputs.project_build }}"
           echo "Build number will be $PROJECT_BUILD"
-          mvn versions:set -DnewVersion="$PROJECT_BUILD" versions:commit -s .mvn/wrapper/settings.xml
-          mvn --batch-mode clean install -DskipTests -s .mvn/wrapper/settings.xml
+          mvn versions:set -DnewVersion="$PROJECT_BUILD" versions:commit
+          mvn --batch-mode clean install -DskipTests
 
       - name: Tag Master or Support branch build as ${{ needs.Calc_project_build.outputs.project_build }}
         if: github.ref_name == 'master' || startsWith(github.base_ref, 'support/')
