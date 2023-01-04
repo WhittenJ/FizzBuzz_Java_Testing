@@ -83,7 +83,7 @@ jobs:
 
       - name: Update Project Dependencies
         run: |
-          mvn versions:update-properties@update-properties-latest -U -s .mvn/wrapper/settings.xml
+          mvn versions:update-properties@update-properties-latest -U
           $POM_CHANGED=git status --porcelain
           echo "update-properties completed-------------------"
           if ( $POM_CHANGED -like '*pom.xml*' )
@@ -169,7 +169,7 @@ jobs:
       - name: Get current project snapshot
         id: calc_build_number
         run: |
-          $CURRENT_PROJECT_VERSION=mvn help:evaluate -Dexpression="project.version" -q -DforceStdout -s .mvn/wrapper/settings.xml
+          $CURRENT_PROJECT_VERSION=mvn help:evaluate -Dexpression="project.version" -q -DforceStdout
           $PROJECT_BUILD=$CURRENT_PROJECT_VERSION
           echo "project_build=$PROJECT_BUILD" >> $env:GITHUB_OUTPUT
 
@@ -207,7 +207,7 @@ jobs:
           languages: java
 
       - name: Run Project Unit Tests
-        run: mvn --batch-mode clean package -s .mvn/wrapper/settings.xml
+        run: mvn --batch-mode clean package
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v2
@@ -243,8 +243,8 @@ jobs:
         run: |
           $PROJECT_BUILD="${{ needs.Calc_project_build.outputs.project_build }}"
           echo "Build number will be $PROJECT_BUILD"
-          mvn versions:set -DnewVersion="$PROJECT_BUILD" versions:commit -s .mvn/wrapper/settings.xml
-          mvn --batch-mode clean install -DskipTests -s .mvn/wrapper/settings.xml
+          mvn versions:set -DnewVersion="$PROJECT_BUILD" versions:commit
+          mvn --batch-mode clean install -DskipTests
 
       - name: Upload Project artifacts to Github
         uses: actions/upload-artifact@v3
