@@ -6,7 +6,7 @@ name: Create Release from Develop
 # Purpose: This will create a release branch using the latest code from Develop.
 #          It will also bump the project.version of Develop's pom.xml by 1 minor version via Pull Request.
 #
-# Note: THIS WORKFLOW WILL NOT CREATE A RELEASE BUILD.  maven-feature-build.yml will create the build when the new 'release/' branch is created and pushed.
+# Note: THIS WORKFLOW WILL NOT CREATE A RELEASE BUILD.  maven-project-build.yml will create the build when the new 'release/' branch is created and pushed.
 #
 # Steps:
 #   Create a Release branch
@@ -22,90 +22,69 @@ name: Create Release from Develop
 
 on: workflow_dispatch
 
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 jobs:
   Create_Release:
+    name: Create Release branch from latest Develop
     runs-on: windows-latest
-
-    env:
-      GH_TOKEN: ${{ secrets.ORG_GHTOKEN }}
 
     strategy:
       fail-fast: false
-      matrix:
-        os: ['windows']
-        jdk: [ '8' ]
-
-    defaults:
-      run:
-        shell: pwsh
 
     steps:
+      # Add token here to enable this workflow to trigger other workflows on PUSH, such as maven-project-build.yml
       - name: Clone the source code
         uses: actions/checkout@v3
         with:
-          token: ${{ secrets.ORG_GHTOKEN }}
-          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up JDK ${{ matrix.jdk }}
+      - name: Set up JDK 8
         uses: actions/setup-java@v3
         with:
           distribution: 'zulu'
-          java-version: ${{ matrix.jdk }}
+          java-version: 8
 
-      # FIXME: Reminder to restore all 'mvn' to './mvnw' in real PK-Bridge
-      # FIXME: Also '-s .mvn/wrapper/settings.xml'
-      #      - name: File System preparation
-      #        run: |
-      #          chmod 755 mvnw
-
-      - name: Set up cache for ~./m2/repository
-        uses: actions/cache@v3
-        with:
-          path: ~/.m2/repository
-          key: maven-${{ matrix.os }}-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            maven-${{ matrix.os }}-
-
-      # $RELEASE_VERSION should be <project.version> without -SNAPSHOT, eg "1.0.245-SNAPSHOT" would be "1.0.245".
-      # $RELEASE_BUILD should be <project.version> with a new qualifier of '-r[Date_Time of commit].[commit short sha]', eg "1.0.245-r20220914_1547.abcdef"
+      # $CURRENT_PROJECT_VERSION should be <project.version> without -SNAPSHOT, eg "1.0.245-SNAPSHOT" would be "1.0.245".
+      # $PROJECT_BUILD should be <project.version> with a new qualifier of '-r[Date_Time of commit].[commit short sha]', eg "1.0.245-r20220914_1547.abcdef"
       - name: Calculate Release Version
         run: |
-          $RELEASE_VERSION=(mvn help:evaluate -Dexpression="project.version" -q -DforceStdout).Trim("-SNAPSHOT")
+          $CURRENT_PROJECT_VERSION=(mvn help:evaluate -Dexpression="project.version" -q -DforceStdout -s .mvn/wrapper/settings.xml).Trim("-SNAPSHOT")
           $COMMIT_DATETIME=(git log -n 1 --pretty=format:"%cd" --date='format:%Y%m%d_%H%M%S')
-          $RELEASE_BUILD=$RELEASE_VERSION+'-r'+$COMMIT_DATETIME+'.'+$(git rev-parse --short HEAD)
-          echo "Release branch will be tagged $RELEASE_VERSION after completion."
-          echo "Release build will be $RELEASE_BUILD after completion."
-          echo "Release_Version=$RELEASE_VERSION" >> $env:GITHUB_ENV
-          echo "Release_Build=$RELEASE_BUILD" >> $env:GITHUB_ENV
+          $COMMIT_SHA=(git rev-parse --short HEAD)
+          $PROJECT_BUILD=$CURRENT_PROJECT_VERSION+'-r'+$COMMIT_DATETIME+'.'+$COMMIT_SHA
+          echo "Master branch will be tagged $CURRENT_PROJECT_VERSION after completion."
+          echo "Release build will be $PROJECT_BUILD after completion."
+          echo "project_version=$CURRENT_PROJECT_VERSION" >> $env:GITHUB_ENV
+          echo "project_build=$PROJECT_BUILD" >> $env:GITHUB_ENV
 
       - name: Create Release Branch from Develop
         run: |
           git switch develop
-          git checkout -b release/${{ env.Release_Version }}
-          git push --set-upstream origin release/${{ env.Release_Version }}
+          git checkout -b release/${{ env.project_version }}
+          git push --set-upstream origin release/${{ env.project_version }}
 
       # See: https://cli.github.com/manual/
       - name: Create pull request for Release into Master
         run: >
           gh pr create
           --base master
-          --head release/${{ env.Release_Version }}
-          --title "Merge ${{ env.Release_Version }} into Master"
+          --head release/${{ env.project_version }}
+          --title "Merge ${{ env.project_version }} into Master"
           --body "Created by GitHub action"
 
-      - name: Reminder - This workflow does not create a build.  Please check the Action for the release/${{ env.Release_Version}} branch.
+      - name: Reminder - This workflow does not create a build.  Please check the Action for the release/${{ env.project_version }} branch.
         run: |
-          echo "The release build should be under the action for the release/${{ env.Release_Version}} branch."
-          echo "The action might be named something like 'Merge pull request ## from hcapatientkeeper/feature/INT-####'"
-          echo "However, the release build should be ${{ env.Release_Build }}"
+          echo "The release build should be under the action for the release/${{ env.project_version }} branch."
+          echo "The action should be named 'Build for release/${{ env.project_version }} branch.'"
+          echo "The release build should be ${{ env.project_build }}"
 
       - name: Calculate next Develop version
         run: |
-          $CURRENT=mvn help:evaluate -Dexpression="project.version" -q -DforceStdout
-          $MAJOR=mvn build-helper:parse-version -D"version.version"=$CURRENT help:evaluate -Dexpression="parsedVersion.majorVersion" -q -DforceStdout
-          $MINOR=mvn build-helper:parse-version -D"version.version"=$CURRENT help:evaluate -Dexpression="parsedVersion.nextMinorVersion" -q -DforceStdout
+          $MAJOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.majorVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
+          $MINOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.nextMinorVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
           $NEXT_VERSION=$MAJOR+'.'+$MINOR+'.0-SNAPSHOT'
-          echo "Current version is $CURRENT"
           echo "Develop will be bumped to $NEXT_VERSION"
           echo "nextVersion=$NEXT_VERSION" >> $env:GITHUB_ENV
 
@@ -116,7 +95,7 @@ jobs:
 
       - name: Bump Develop version to ${{ env.nextVersion }}
         run: |
-          mvn versions:set -DnewVersion="${{ env.nextVersion }}" versions:commit
+          mvn versions:set -DnewVersion="${{ env.nextVersion }}" versions:commit -s .mvn/wrapper/settings.xml
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add .
@@ -130,4 +109,4 @@ jobs:
           --base develop
           --head feature/${{ env.nextVersion }}
           --title "Bump Develop to ${{ env.nextVersion }}"
-          --body "Merge all possible changes from Release branch.  Also bump the Develop branch version to ${{ env.nextVersion }}.  This is an automated Pull Request created by GitHub action."
+          --body "Bump the Develop branch version to ${{ env.nextVersion }}.  This is an automated Pull Request created by GitHub action.  Please merge this Pull Request AFTER any Release Branch changes are merged."

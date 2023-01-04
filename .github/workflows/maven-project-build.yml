@@ -1,0 +1,237 @@
+# This workflow will build a Java project with Maven
+# For more information see: https://help.github.com/actions/language-and-framework-guides/building-and-testing-java-with-maven
+
+name: Build Project
+
+# Purpose: This will create a Build when a commit is PUSHED or a PULL REQUEST is MERGED.
+
+# Job:
+# Validate_pull_request - The purpose of this job is to quickly exit the action successfully if triggered by a CLOSED but not MERGED pull request.
+#   Steps:
+#     1. If the workflow was triggered by a Pull Request AND NOT merged, then the workflow is not needed.
+#         Otherwise, it's a valid workflow request.
+#
+# Calc_project_build - The purpose of this job is to calculate the build number of the run.  eg, 1.1.0-f20221205_1406.bas63e
+#   Steps:
+#     1. Checkout code.
+#     2. Setup Java.
+#     3. Generate the build qualifier, such as "-f" or "-d".
+#         - Feature builds can be identified by -f
+#         - Release builds can be identified by -r
+#         - Develop builds can be identified by -d
+#         - Support builds can be identified by -s
+#         - Hotfix builds can be identified by -h
+#     4. Calculate the build number by using the project.version.
+#
+# Unit_test_project - The purpose of this job is to just run the unit tests of the Project repo.
+#   Steps:
+#     1. Checkout code.
+#     2. Setup Java.
+#     3. Restore the Cache for the Project dependencies.
+#     4. Run the unit tests with Maven.
+#
+# Build_project - The purpose of this job is to compile and deploy the Project installers.
+#   Steps:
+#     1. Checkout code.
+#     2. Setup Java.
+#     3. Restore the Cache for the Project dependencies.
+#     4. Restore the Cache for NSIS, which is a Windows based program that creates *.exe installers.
+#     5. Build and deploy the Project build to GitHub packages using Maven.
+#     6. Create and upload the Project installers to GitHub actions.
+
+run-name: Build for '${{ github.base_ref || github.ref_name }}' branch.
+
+on:
+  push:
+    branches:
+      - feature/**
+      - release/**
+      - master
+
+  pull_request:
+    branches:
+      - develop
+      - hotfix/**
+      - support/**
+    types: [ closed ]
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  Validate_pull_request:
+    name: Check for Valid Pull Request or Push
+    runs-on: windows-latest
+
+    outputs:
+      valid_request: ${{ steps.check_valid.outputs.valid_request }}
+
+    steps:
+      - name: Check if Pull Request was closed, but not merged.
+        id: check_valid
+        run: |
+          if ( $${{ github.event.pull_request.state == 'closed' && github.event.pull_request.merged == false }} ) {
+            echo "Pull Request #${{ github.event.number }} has been closed without being merged."
+            echo "No action required.  Exiting..."
+            $VALID_REQUEST=""
+          }
+          else {
+            $VALID_REQUEST=1
+          }
+          echo "valid_request=$VALID_REQUEST" >> $env:GITHUB_OUTPUT
+
+  Calc_project_build:
+    name: Calculate Project Build Number
+    runs-on: windows-latest
+    needs: [ Validate_pull_request ]
+    if: needs.Validate_pull_request.outputs.valid_request == 1
+
+    strategy:
+      fail-fast: false
+
+    outputs:
+      project_build: ${{ steps.calc_build_number.outputs.project_build }}
+
+    steps:
+      - name: Clone the source code
+        uses: actions/checkout@v3
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: 8
+
+      # Note:
+      #   ref_name will be the PUSHED to branch name, eg 'feature/INT-1234'.
+      #   base_ref is the TARGET (eg, develop) of a Pull Request and will only be defined for Pull Requests.  It's nil otherwise.
+      #   head_ref is the SOURCE (eg, 'feature/INT-1234') of a Pull Request and will only be defined for Pull Requests.  It's nil otherwise.
+      - name: Generate build qualifier
+        if: github.ref_name != 'master'
+        run: |
+          $PROJECT_QUALIFIER=$(
+            if ( $${{ startsWith(github.ref_name, 'feature/') }} ) {
+              "-f" }
+            elseif ( $${{ startsWith(github.ref_name, 'release/') }} ) {
+              "-r" }
+            elseif ( $${{ github.event.pull_request.merged == true && github.base_ref == 'develop' && startsWith(github.head_ref, 'feature/') }} ) {
+              "-d" }
+            elseif ( $${{ github.event.pull_request.merged == true && github.base_ref == 'develop' && startsWith(github.head_ref, 'release/') }} ) {
+              "-d" }
+            elseif ( $${{ github.event.pull_request.merged == true && startsWith(github.base_ref, 'support/') && startsWith(github.head_ref, 'feature/') }} ) {
+              "-s" }
+            elseif ( $${{ startsWith(github.ref_name, 'hotfix/') }} ) {
+              "-h" }
+            else {
+              echo "**** An unknown error has occurred.  Exiting. ****"
+              echo "Debugging Information:"
+              echo "ref_name=${{ github.ref_name }}"
+              echo "base_ref=${{ github.base_ref }}"
+              echo "head_ref=${{ github.head_ref }}"
+              echo "merged=${{ github.event.pull_request.merged }}"
+              exit 1
+            } )
+          echo "project_qualifier=$PROJECT_QUALIFIER" >> $env:GITHUB_ENV
+
+      # $CURRENT_PROJECT_VERSION should be <project.version> without -SNAPSHOT, eg "1.0.245-SNAPSHOT" would be "1.0.245".
+      # $PROJECT_BUILD should be <project.version> with a new qualifier of '-f[Date_Time of commit].[commit short sha]', eg "1.0.245-f20220914_1547.abcdef"
+      #   Unless this is a Master version build, then the build should just be <project.version> without -SNAPSHOT.
+      - name: Calculate build number
+        id: calc_build_number
+        run: |
+          if ( $${{ startsWith(github.ref_name, 'master') }} ) {
+            $PROJECT_BUILD=(mvn help:evaluate -Dexpression="project.version" -q -DforceStdout -s .mvn/wrapper/settings.xml).Trim("-SNAPSHOT")
+          }
+          else {
+            $MAJOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.majorVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
+            $MINOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.minorVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
+            $PATCH=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.incrementalVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
+            $PROJECT_VERSION=$MAJOR+'.'+$MINOR+'.'+$PATCH
+            $COMMIT_DATETIME=(git log -n 1 --pretty=format:"%cd" --date='format:%Y%m%d_%H%M%S')
+            $COMMIT_SHA=(git rev-parse --short HEAD)
+            $PROJECT_BUILD=$PROJECT_VERSION+"${{ env.project_qualifier }}"+$COMMIT_DATETIME+'.'+$COMMIT_SHA
+          }
+          echo "project_build=$PROJECT_BUILD" >> $env:GITHUB_OUTPUT
+
+      - name: The build will be ${{ steps.calc_build_number.outputs.project_build }}
+        run: echo "The build is ${{ steps.calc_build_number.outputs.project_build }}"
+
+  Unit_test_project:
+    name: Project Unit Tests
+    runs-on: windows-latest
+    needs: [ Calc_project_build ]
+
+    strategy:
+      fail-fast: false
+
+    steps:
+      - name: Clone the source code
+        uses: actions/checkout@v3
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: 8
+
+      - name: Set up cache for ~./m2/repository
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            maven-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+            maven-${{ runner.os }}-
+            maven-
+
+      - name: Run Project Unit Tests
+        run: mvn --batch-mode clean package -s .mvn/wrapper/settings.xml
+
+  Build_project:
+    name: Build and Deploy Project
+    runs-on: windows-latest
+    needs: [ Calc_project_build ]
+
+    strategy:
+      fail-fast: false
+
+    steps:
+      - name: Clone the source code
+        uses: actions/checkout@v3
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: 8
+
+      - name: Set up cache for ~./m2/repository
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            maven-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+            maven-${{ runner.os }}-
+            maven-
+
+      - name: Deploy ${{ needs.Calc_project_build.outputs.project_build }} with Maven
+        run: |
+          $PROJECT_BUILD="${{ needs.Calc_project_build.outputs.project_build }}"
+          echo "Build number will be $PROJECT_BUILD"
+          mvn versions:set -DnewVersion="$PROJECT_BUILD" versions:commit -s .mvn/wrapper/settings.xml
+          mvn --batch-mode clean install -DskipTests -s .mvn/wrapper/settings.xml
+
+      - name: Tag Master or Support branch build as ${{ needs.Calc_project_build.outputs.project_build }}
+        if: github.ref_name == 'master' || startsWith(github.base_ref, 'support/')
+        uses: mathieudutour/github-tag-action@v6.1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          custom_tag: ${{ needs.Calc_project_build.outputs.project_build }}
+          tag_prefix: ''
+
+      - name: Upload Project artifacts to Github
+        uses: actions/upload-artifact@v3
+        with:
+          name: Project-${{ needs.Calc_project_build.outputs.project_build }}_Package
+          path: staging

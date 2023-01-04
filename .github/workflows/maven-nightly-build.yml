@@ -3,67 +3,92 @@
 
 name: Nightly Build for Develop
 
+# Purpose: This will do several tasks:
+#   1. Check for dependency version updates.
+#   2. Run unit tests and CodeQL scanning for the Project.
+#   3. Deploy a SNAPSHOT build of the Project for any possible testing required.
+
+# Job:
+# Update_project - The purpose of this job is to automatically update the dependency versions.
+#   Steps:
+#     1. Checkout code.
+#         - The token is REQUIRED in order to trigger a build for the auto-version feature branches.
+#         - Fetch-depth: 0 is REQUIRED for automatic deletion of old automatic update pull requests.
+#     2. Setup Java.
+#     3. Check for updates to the dependencies.
+#     4. If there were changes, locally commit the POM.xml changes.
+#     5. If there were changes, check if there is already an existing Pull Request with these changes.
+#         - If there is an existing Pull Request, check if the POM.xml changes match.
+#             - If they match, do nothing, go to next Job.
+#             - If they do not match, delete the OLD Pull Request and go to the next Step.
+#         - If there are no existing Pull Requests, go to the next Step.
+#     6. PUSH the committed local POM.xml changes to GitHub.
+#     7. Create a Pull Request for the POM.xml changes.
+#
+# Calc_project_build - The purpose of this job is to calculate the build number of the run.  eg, 1.1.0-f20221205_1406.bas63e
+#   Steps:
+#     1. Checkout code.
+#     2. Setup Java.
+#     3. Get the build number by using the project.version.
+#
+# Unit_test_project - The purpose of this job is to just run the unit tests of the Project repo.
+#   Steps:
+#     1. Checkout code.
+#     2. Setup Java.
+#     3. Restore the Cache for the Project dependencies.
+#     4. Init CodeQL for Java.
+#     5. Run the unit tests with Maven.
+#     6. Perform CodeQL scan
+#
+# Build_project - The purpose of this job is to compile and deploy the Project installers.
+#   Steps:
+#     1. Checkout code.
+#     2. Setup Java.
+#     3. Restore the Cache for the Project dependencies.
+#     4. Restore the Cache for NSIS, which is a Windows based program that creates *.exe installers.
+#     5. Build and deploy the Project build to GitHub packages using Maven.
+#     6. Create and upload the Project installers to GitHub actions.
+
 on:
+  workflow_dispatch:
+
   schedule:
     - cron: '50 0 * * 1-5'
 
-jobs:
-  Nightly_Bridge_Build:
-    runs-on: windows-latest
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+jobs:
+  Update_project:
+    name: Automatically update Project dependencies
+    runs-on: windows-latest
 
     strategy:
       fail-fast: false
-      matrix:
-        os: ['windows']
-        jdk: [ '8' ]
-
-    defaults:
-      run:
-        shell: pwsh
 
     steps:
+      # Add token here to enable this workflow to trigger other workflows on PUSH, such as maven-project-build.yml
+      # fetch-depth:0 also needs to be set to compare auto-version branches
       - name: Clone the source code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Set up JDK ${{ matrix.jdk }}
+      - name: Set up JDK 8
         uses: actions/setup-java@v3
         with:
           distribution: 'zulu'
-          java-version: ${{ matrix.jdk }}
+          java-version: 8
 
-      - name: Set up cache for ~./m2/repository
-        uses: actions/cache@v3
-        with:
-          path: ~/.m2/repository
-          key: maven-${{ matrix.os }}-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            maven-${{ matrix.os }}-
-
-      - name: Set up cache for NSIS v2.46
-        id: cache_NSIS
-        uses: actions/cache@v3
-        with:
-          path: C:\Program Files (x86)\NSIS
-          key: ${{ matrix.os }}-nsis
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v2
-        with:
-          languages: java
-
-      - name: update API version
+      - name: Update Project Dependencies
         run: |
-          mvn versions:update-properties@update-properties-latest -U
+          mvn versions:update-properties@update-properties-latest -U -s .mvn/wrapper/settings.xml
           $POM_CHANGED=git status --porcelain
           echo "update-properties completed-------------------"
           if ( $POM_CHANGED -like '*pom.xml*' )
           {
-            echo "code_changed=$POM_CHANGED" >> $env:GITHUB_ENV            
+            echo "code_changed=$POM_CHANGED" >> $env:GITHUB_ENV
           }
 
       - name: Create Auto-Version Branch from Develop
@@ -71,21 +96,48 @@ jobs:
         run: |
           git switch develop
           git checkout -b feature/auto-version-${{ github.run_number }}
-          git push --set-upstream origin feature/auto-version-${{ github.run_number }}
 
       - name: Commit POM changes
         if: ${{ env.code_changed }}
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add ./pom.xml
+          git add .
           git commit -m 'POM versions changed'
-          git pull
-          git push
+
+      - name: Check for already existing Pull Request
+        if: ${{ env.code_changed }}
+        run: |
+          $SEARCH_RESULTS=(gh pr list --search "Maven POM auto updates into Develop")
+          $SPLIT=($SEARCH_RESULTS -split "`t")
+          $PREV_AUTO_VER_PR=$SPLIT[0]
+          $PREV_AUTO_VER_BRANCH=$SPLIT[2]
+          echo "Previous Auto Version Pull Request = $PREV_AUTO_VER_PR"
+          echo "Previous Auto Version Branch = $PREV_AUTO_VER_BRANCH"
+          if ( $PREV_AUTO_VER_BRANCH ) {
+            $DIFF=(git diff feature/auto-version-${{ github.run_number }} origin/$PREV_AUTO_VER_BRANCH)
+            if ( !$DIFF ) {
+              echo "There's no additional POM changes.  No new Pull Request needed."
+              $STOP=1
+              echo "stop=$STOP" >> $env:GITHUB_ENV
+            }
+            else {
+              echo "Additional POM changes detected.  Deleting old Pull Request and Branch."
+              gh pr comment $PREV_AUTO_VER_PR --body "Additional POM changes needed since creation of this Pull Request.  Closing this Pull Request and opening a new one.  [This is an automated message]"
+              gh pr close $PREV_AUTO_VER_PR --delete-branch
+            }
+          }
+          else {
+            echo "No open Automatic POM changes Pull Request detected."
+          }
+
+      - name: Push POM Changes to GitHub
+        if: ${{ env.code_changed && !env.stop }}
+        run: git push --set-upstream origin feature/auto-version-${{ github.run_number }}
 
       # See: https://cli.github.com/manual/
       - name: Create pull request for Auto-Version into Develop
-        if: ${{ env.code_changed }}
+        if: ${{ env.code_changed && !env.stop }}
         run: >
           gh pr create
           --base develop
@@ -93,55 +145,109 @@ jobs:
           --title "$(date +'%m-%d-%Y') - Maven POM auto updates into Develop"
           --body "Created by Scheduled GitHub action"
 
-      # Get the current semantic build tag for the branch
-      - name: Get current build number
-        run: |
-          $NIGHTLY_VERSION=mvn help:evaluate -Dexpression="project.version" -q -DforceStdout
-          echo "Nightly_Build=$NIGHTLY_VERSION" >> $env:GITHUB_ENV
+  Calc_project_build:
+    name: Calculate Project Build Number
+    runs-on: windows-latest
+    needs: [ Update_project ]
 
-      - name: Build with Maven - ${{ env.Nightly_Build }}
+    strategy:
+      fail-fast: false
+
+    outputs:
+      project_build: ${{ steps.calc_build_number.outputs.project_build }}
+
+    steps:
+      - name: Clone the source code
+        uses: actions/checkout@v3
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: 8
+
+      - name: Get current project snapshot
+        id: calc_build_number
         run: |
-          echo "Version will be ${{ env.Nightly_Build }}"
-          mvn --batch-mode clean install
+          $CURRENT_PROJECT_VERSION=mvn help:evaluate -Dexpression="project.version" -q -DforceStdout -s .mvn/wrapper/settings.xml
+          $PROJECT_BUILD=$CURRENT_PROJECT_VERSION
+          echo "project_build=$PROJECT_BUILD" >> $env:GITHUB_OUTPUT
+
+  Unit_test_project:
+    name: Project Unit Tests and CodeQL Scan
+    runs-on: windows-latest
+    needs: [ Calc_project_build ]
+
+    strategy:
+      fail-fast: false
+
+    steps:
+      - name: Clone the source code
+        uses: actions/checkout@v3
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: 8
+
+      - name: Set up cache for ~./m2/repository
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            maven-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+            maven-${{ runner.os }}-
+            maven-
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: java
+
+      - name: Run Project Unit Tests
+        run: mvn --batch-mode clean package -s .mvn/wrapper/settings.xml
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v2
 
-      # Required for Bridge to build *.exe installer
-      - name: Install NSIS if not cached
-        if: steps.cache_NSIS.outputs.cache-hit != 'true'
+  Build_project:
+    runs-on: windows-latest
+    needs: [ Calc_project_build ]
+
+    strategy:
+      fail-fast: false
+
+    steps:
+      - name: Clone the source code
+        uses: actions/checkout@v3
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: 8
+
+      - name: Set up cache for ~./m2/repository
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            maven-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+            maven-${{ runner.os }}-
+            maven-
+
+      - name: Deploy ${{ needs.Calc_project_build.outputs.project_build }} with Maven
         run: |
-          [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-          choco install nsis.install --version=2.46 -y -dv
+          $PROJECT_BUILD="${{ needs.Calc_project_build.outputs.project_build }}"
+          echo "Build number will be $PROJECT_BUILD"
+          mvn versions:set -DnewVersion="$PROJECT_BUILD" versions:commit -s .mvn/wrapper/settings.xml
+          mvn --batch-mode clean install -DskipTests -s .mvn/wrapper/settings.xml
 
-      # This step overwrites parts of the NSIS program with PK specific code.  I don't know what exactly.
-      #      - name: Extract NSIS log if not cached
-      #        if: steps.cache_NSIS.outputs.cache-hit != 'true'
-      #        run: |
-      #          echo "$(pwd)"
-      #          7z.exe x "D:\a\pk-bridge\pk-bridge\bridge-build\nsis-2.46-log.zip" -o"C:\Program Files (x86)\NSIS" -y -r
-      #          cd "D:\a\pk-bridge\pk-bridge"
-      #          echo "$(pwd)"
-      #          dir
-
-      # Create Bridge. Copy zip and exe files.  Rename *.exe file. - develop branch
-      #      - name: Create Bridge installer
-      #        run: |
-      #          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DMIM_FILENAME="D:\a\pk-bridge\pk-bridge\bridge-build\bridge.zip" /DVERSION_NUMBER="${{ env.Nightly_Build }}" /DPRODUCT_VERSION="${{ env.Nightly_Build }}" "D:\a\pk-bridge\pk-bridge\installer\bridge\bridge.nsi"
-
-      #      - name: Copy and Upload Bridge zip, exe, and setupexe via Maven
-      #        run: |
-      #          mkdir staging
-      #          copy "D:/a/pk-bridge/pk-bridge/bridge-build/*.zip" staging
-      #          copy "D:/a/pk-bridge/pk-bridge/installer/bridge/*.exe" staging
-      #          copy "D:\a\pk-bridge\pk-bridge\installer\bridge\bridgesetup-${{ env.Nightly_Build }}.exe" "D:\a\pk-bridge\pk-bridge\staging\bridge.exe"
-      #          ./mvnw --batch-mode -f "uploadzip.xml" clean deploy -Drevision="${{ env.Nightly_Build }}" -s .mvn/wrapper/settings.xml
-      #          ./mvnw --batch-mode -f "uploadexe.xml" clean deploy -Drevision="${{ env.Nightly_Build }}" -s .mvn/wrapper/settings.xml
-      #          ./mvnw --batch-mode -f "uploadsetupexe.xml" clean deploy -Drevision="${{ env.Nightly_Build }}" -s .mvn/wrapper/settings.xml
-
-      # This will find no files under a PUSH request.  This is normal and expected.  It should only WARN.
-      #      - name: Upload Bridge artifacts to GitHub
-      #        uses: actions/upload-artifact@v2
-      #        with:
-      #          name: Bridge-${{ env.Nightly_Build }}_Package
-      #          path: staging
+      - name: Upload Project artifacts to Github
+        uses: actions/upload-artifact@v3
+        with:
+          name: Project-${{ needs.Calc_project_build.outputs.project_build }}_Package
+          path: staging

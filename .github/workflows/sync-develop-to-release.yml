@@ -37,26 +37,22 @@ jobs:
           distribution: 'zulu'
           java-version: 8
 
-#      - name: File System preparation
-#        run: chmod 755 mvnw
-
       - name: Get Release Version
         run: |
-          $CURRENT_BRIDGE_VERSION=mvn help:evaluate -Dexpression="project.version" -q -DforceStdout
-          $MAJOR=mvn build-helper:parse-version -D"version.version"=$CURRENT_BRIDGE_VERSION help:evaluate -Dexpression="parsedVersion.majorVersion" -q -DforceStdout
-          $MINOR=mvn build-helper:parse-version -D"version.version"=$CURRENT_BRIDGE_VERSION help:evaluate -Dexpression="parsedVersion.minorVersion" -q -DforceStdout
-          $PATCH=mvn build-helper:parse-version -D"version.version"=$CURRENT_BRIDGE_VERSION help:evaluate -Dexpression="parsedVersion.incrementalVersion" -q -DforceStdout
-          $NEXT_MINOR=mvn build-helper:parse-version -D"version.version"=$CURRENT_BRIDGE_VERSION help:evaluate -Dexpression="parsedVersion.nextMinorVersion" -q -DforceStdout
-          $BRIDGE_VERSION=$MAJOR+'.'+$MINOR+'.'+$PATCH
-          $NEXT_BRIDGE_VERSION=$MAJOR+'.'+$NEXT_MINOR+'.0-SNAPSHOT'
-          echo "bridge_version=$BRIDGE_VERSION" >> $env:GITHUB_ENV
-          echo "next_bridge_version=$NEXT_BRIDGE_VERSION" >> $env:GITHUB_ENV
+          $MAJOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.majorVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
+          $MINOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.minorVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
+          $PATCH=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.incrementalVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
+          $NEXT_MINOR=mvn build-helper:parse-version help:evaluate -Dexpression="parsedVersion.nextMinorVersion" -q -DforceStdout -s .mvn/wrapper/settings.xml
+          $PROJECT_VERSION=$MAJOR+'.'+$MINOR+'.'+$PATCH
+          $NEXT_PROJECT_VERSION=$MAJOR+'.'+$NEXT_MINOR+'.0-SNAPSHOT'
+          echo "project_version=$PROJECT_VERSION" >> $env:GITHUB_ENV
+          echo "next_project_version=$NEXT_PROJECT_VERSION" >> $env:GITHUB_ENV
 
       # See: https://cli.github.com/manual/
       # Check if we need to make a Pull Request to merge Release branch changes into Develop.
       - name: Check if a Pull Request was created to merge Release into Develop
         run: |
-          $PR_CREATED=(gh pr list --search "Merge Release/${{ env.bridge_version }} changes into Develop.")
+          $PR_CREATED=(gh pr list --search "Merge Release/${{ env.project_version }} changes into Develop.")
           echo "PR_Created=$PR_CREATED" >> $env:GITHUB_ENV
 
       # Only create a PR in Release branches in which no "Merge Release/** changes into Develop." exists.
@@ -66,5 +62,5 @@ jobs:
         run: >
           gh pr create
           --base develop
-          --title "Merge Release/${{ env.bridge_version }} changes into Develop."
-          --body "This Pull Request should contain all of the changes made in the Release branch.  This request should be merged BEFORE the Bump Develop to ${{ env.next_bridge_version }} Pull Request."
+          --title "Merge Release/${{ env.project_version }} changes into Develop."
+          --body "This Pull Request should contain all of the changes made in the Release branch.  This request should be merged BEFORE the Bump Develop to ${{ env.next_project_version }} Pull Request."
