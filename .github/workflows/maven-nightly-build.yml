@@ -56,7 +56,7 @@ on:
     - cron: '50 0 * * 1-5'
 
 env:
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GITHUB_TOKEN: ${{ secrets.JW_TOKEN }}
 
 jobs:
   Update_project:
@@ -72,7 +72,7 @@ jobs:
       - name: Clone the source code
         uses: actions/checkout@v3
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.JW_TOKEN }}
           fetch-depth: 0
 
       - name: Set up JDK 8

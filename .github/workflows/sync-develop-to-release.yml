@@ -19,7 +19,7 @@ on:
     types: [ closed ]
 
 env:
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GITHUB_TOKEN: ${{ secrets.JW_TOKEN }}
 
 jobs:
   Create_release_branch_pull_request:
