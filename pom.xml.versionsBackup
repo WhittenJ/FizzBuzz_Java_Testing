@@ -38,6 +38,10 @@
                     <artifactId>versions-maven-plugin</artifactId>
                     <version>${maven.versions.version}</version>
                     <configuration>
+                        <!-- Don't update below properties (comma separated)-->
+                        <excludeProperties>
+                            jetty.version,tomcat.jasper.version,dataservices.version
+                        </excludeProperties>
                         <!-- Properties are required for a repo if there are multiple artifacts using same version
                              Providing one dependency helps version plugin resolve the common latest version between all the artifacts-->
                         <!--suppress UnresolvedMavenProperty -->
@@ -115,6 +119,14 @@
                     <groupId>org.codehaus.mojo</groupId>
                     <artifactId>build-helper-maven-plugin</artifactId>
                     <version>${maven.build.helper.version}</version>
+                    <configuration>
+                        <versionString>${version.version}</versionString>
+                        <name/>
+                        <fileSet/>
+                        <regex/>
+                        <value/>
+                        <source/>
+                    </configuration>
                 </plugin>
             </plugins>
         </pluginManagement>
